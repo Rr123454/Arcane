@@ -1,94 +1,154 @@
 #include "main.h"
+#include "lemlib/api.hpp"
 
-/**
- * A callback function for LLEMU's center button.
- *
- * When this callback is fired, it will toggle line 2 of the LCD text between
- * "I was pressed!" and nothing.
- */
-void on_center_button() {
-	static bool pressed = false;
-	pressed = !pressed;
-	if (pressed) {
-		pros::lcd::set_text(2, "I was pressed!");
-	} else {
-		pros::lcd::clear_line(2);
-	}
-}
+using namespace pros;
+using namespace lemlib;
 
-/**
- * Runs initialization code. This occurs as soon as the program is started.
- *
- * All other competition modes are blocked by initialize; it is recommended
- * to keep execution time for this mode under a few seconds.
- */
+// -----------------------------------------------------------------------------
+// Controller
+// -----------------------------------------------------------------------------
+pros::Controller controller(pros::E_CONTROLLER_MASTER);
+
+// -----------------------------------------------------------------------------
+// Motors
+// -----------------------------------------------------------------------------
+// These are the same ports that were already in Arcane.
+// A negative port means that motor is reversed.
+pros::MotorGroup leftMotors({1, -2, 3}, pros::MotorGearset::green);
+pros::MotorGroup rightMotors({-4, 5, -6}, pros::MotorGearset::green);
+pros::MotorGroup liftMotors({7, 8}, pros::MotorGearset::green);
+
+// -----------------------------------------------------------------------------
+// Sensors
+// -----------------------------------------------------------------------------
+// Change this port to wherever the inertial sensor is actually plugged in.
+pros::Imu imu(9);
+
+// -----------------------------------------------------------------------------
+// LemLib drivetrain
+// -----------------------------------------------------------------------------
+// IMPORTANT: these measurements are starter values.
+// We will measure the real robot and tune them later.
+lemlib::Drivetrain drivetrain(
+    &leftMotors,                 // left motor group
+    &rightMotors,                // right motor group
+    12.0,                        // track width in inches
+    lemlib::Omniwheel::NEW_325,  // drive wheel diameter
+    200,                         // wheel RPM
+    2                            // horizontal drift
+);
+
+// -----------------------------------------------------------------------------
+// LemLib PID controllers
+// -----------------------------------------------------------------------------
+// These are starter values only. We will tune them on the real robot.
+lemlib::ControllerSettings lateralController(
+    10,   // kP
+    0,    // kI
+    3,    // kD
+    3,    // anti-windup range
+    1,    // small error range (inches)
+    100,  // small error timeout (ms)
+    3,    // large error range (inches)
+    500,  // large error timeout (ms)
+    20    // slew
+);
+
+lemlib::ControllerSettings angularController(
+    2,    // kP
+    0,    // kI
+    10,   // kD
+    3,    // anti-windup range
+    1,    // small error range (degrees)
+    100,  // small error timeout (ms)
+    3,    // large error range (degrees)
+    500,  // large error timeout (ms)
+    0     // slew
+);
+
+// -----------------------------------------------------------------------------
+// Odometry sensors
+// -----------------------------------------------------------------------------
+// For now we are only using the IMU.
+// Later we will add the two tracking wheels here.
+lemlib::OdomSensors sensors(
+    nullptr, // vertical tracking wheel 1
+    nullptr, // vertical tracking wheel 2
+    nullptr, // horizontal tracking wheel 1
+    nullptr, // horizontal tracking wheel 2
+    &imu     // inertial sensor
+);
+
+// -----------------------------------------------------------------------------
+// Chassis
+// -----------------------------------------------------------------------------
+lemlib::Chassis chassis(
+    drivetrain,
+    lateralController,
+    angularController,
+    sensors
+);
+
+// -----------------------------------------------------------------------------
+// Initialize
+// -----------------------------------------------------------------------------
 void initialize() {
-	pros::lcd::initialize();
-	pros::lcd::set_text(1, "Hello PROS User!");
+    pros::lcd::initialize();
+    pros::lcd::set_text(0, "Arcane - LemLib");
 
-	pros::lcd::register_btn1_cb(on_center_button);
+    // Calibrates the IMU and prepares LemLib.
+    chassis.calibrate();
+
+    // Print the robot pose to the Brain screen.
+    pros::Task screenTask([] {
+        while (true) {
+            pros::lcd::print(1, "X: %.2f", chassis.getPose().x);
+            pros::lcd::print(2, "Y: %.2f", chassis.getPose().y);
+            pros::lcd::print(3, "Heading: %.2f", chassis.getPose().theta);
+            pros::delay(50);
+        }
+    });
 }
 
-/**
- * Runs while the robot is in the disabled state of Field Management System or
- * the VEX Competition Switch, following either autonomous or opcontrol. When
- * the robot is enabled, this task will exit.
- */
 void disabled() {}
 
-/**
- * Runs after initialize(), and before autonomous when connected to the Field
- * Management System or the VEX Competition Switch. This is intended for
- * competition-specific initialization routines, such as an autonomous selector
- * on the LCD.
- *
- * This task will exit when the robot is enabled and autonomous or opcontrol
- * starts.
- */
 void competition_initialize() {}
 
-/**
- * Runs the user autonomous code. This function will be started in its own task
- * with the default priority and stack size whenever the robot is enabled via
- * the Field Management System or the VEX Competition Switch in the autonomous
- * mode. Alternatively, this function may be called in initialize or opcontrol
- * for non-competition testing purposes.
- *
- * If the robot is disabled or communications is lost, the autonomous task
- * will be stopped. Re-enabling the robot will restart the task, not re-start it
- * from where it left off.
- */
-void autonomous() {}
+// -----------------------------------------------------------------------------
+// Autonomous
+// -----------------------------------------------------------------------------
+void autonomous() {
+    // Tell LemLib where the robot starts.
+    chassis.setPose(0, 0, 0);
 
-/**
- * Runs the operator control code. This function will be started in its own task
- * with the default priority and stack size whenever the robot is enabled via
- * the Field Management System or the VEX Competition Switch in the operator
- * control mode.
- *
- * If no competition control is connected, this function will run immediately
- * following initialize().
- *
- * If the robot is disabled or communications is lost, the
- * operator control task will be stopped. Re-enabling the robot will restart the
- * task, not resume it from where it left off.
- */
+    // Simple test autonomous.
+    // Drive forward 24 inches, then turn to 90 degrees.
+    chassis.moveToPoint(0, 24, 2000);
+    chassis.turnToHeading(90, 1500);
+}
+
+// -----------------------------------------------------------------------------
+// Driver control
+// -----------------------------------------------------------------------------
 void opcontrol() {
-	pros::Controller master(pros::E_CONTROLLER_MASTER);
-	pros::MotorGroup left_mg({1, -2, 3});    // CCreates a motor group with forwards ports 1 & 3 and reversed port 2
-	pros::MotorGroup right_mg({-4, 5, -6});  // Creates a motor group with forwards port 5 and reversed ports 4 & 6
-	pros::MotorGroup lift_mg({7, 8});          // Creates a motor group with forwards ports 7 & 8
+    while (true) {
+        int forward = controller.get_analog(pros::E_CONTROLLER_ANALOG_LEFT_Y);
+        int turn = controller.get_analog(pros::E_CONTROLLER_ANALOG_RIGHT_X);
 
-	while (true) {
-		pros::lcd::print(0, "%d %d %d", (pros::lcd::read_buttons() & LCD_BTN_LEFT) >> 2,
-		                 (pros::lcd::read_buttons() & LCD_BTN_CENTER) >> 1,
-		                 (pros::lcd::read_buttons() & LCD_BTN_RIGHT) >> 0);  // Prints status of the emulated screen LCDs
+        // LemLib arcade drive.
+        chassis.arcade(forward, turn);
 
-		// Arcade control scheme
-		int dir = master.get_analog(ANALOG_LEFT_Y);    // Gets amount forward/backward from left joystick
-		int turn = master.get_analog(ANALOG_RIGHT_X);  // Gets the turn left/right from right joystick
-		left_mg.move(dir - turn);                      // Sets left motor voltage
-		right_mg.move(dir + turn);                     // Sets right motor voltage
-		pros::delay(20);                               // Run for 20 ms then update
-	}
+        // Lift control.
+        if (controller.get_digital(pros::E_CONTROLLER_DIGITAL_R1)) {
+            liftMotors.move(127);
+        }
+        else if (controller.get_digital(pros::E_CONTROLLER_DIGITAL_R2)) {
+            liftMotors.move(-127);
+        }
+        else {
+            liftMotors.brake();
+        }
+
+        pros::delay(20);
+    }
 }
